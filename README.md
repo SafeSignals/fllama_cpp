@@ -61,6 +61,36 @@ fllamaChat(request, (response, json, done, error) {
   });
 });
 ```
+### Realtime voice (native only)
+`fllamaRealtimeOpen` runs a session of llama.cpp's realtime API, the
+`/v1/realtime` WebSocket of llama-server, in process. Events are the JSON
+objects of OpenAI Realtime GA; see "WebSocket `/v1/realtime`" in
+`src/llama.cpp/tools/server/README.md`. A model with streaming audio input
+and chat (LFM3-Audio, LFM3-Omni) holds a voice conversation, with speech out
+and tool calls. Voxtral Realtime, or a live ASR checkpoint with
+`query: 'intent=transcription'`, transcribes.
+
+```dart
+final session = fllamaRealtimeOpen(FllamaRealtimeRequest(
+  modelPath: 'LFM3-Audio-2B-Q4_K_M.gguf',
+  mmprojPath: 'mmproj-LFM3-Audio-2B-Q8_0.gguf',
+  contextSize: 32768,
+));
+session.events.listen((event) {
+  // session.created, response.output_text.delta,
+  // response.output_audio.delta (base64 PCM16), ..., and last
+  // fllama.realtime.closed.
+});
+session.send({'type': 'input_audio_buffer.append', 'audio': base64Pcm16});
+session.send({'type': 'input_audio_buffer.commit'});
+session.send({'type': 'response.create'});
+```
+
+The server does no turn detection: the app commits each turn. The
+conversation stays in the context, and audio uses it (LFM3-Audio: about
+12.5 positions per second of input). A full context ends the session with
+an error. A session holds one of the model's four slots until it ends.
+
 ## Tips & Tricks
 ### Web
   Web uses a wllama/WebGPU runtime. In a Flutter web build, the fllama build hook installs it in `web/kiln/fllama_cpp/` of the app, and fllama loads it at the first call; the app needs no script tag (kiln ADR 002). Other embedders serve those files and set `FllamaWeb.runtimeUri`.

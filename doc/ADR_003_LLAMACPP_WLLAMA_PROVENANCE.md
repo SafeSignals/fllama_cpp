@@ -64,6 +64,10 @@ Patches (2026-11-13):
   b12211 it patches `tools/mtmd/mtmd-subcontext.cpp` (upstream removed
   `clip.cpp`). Without it, an mmproj load without memory for its compute buffer reports success
   and every image request aborts. Drop it when llama.cpp has the PR.
+- `0002-server-realtime-overflow-error.patch`: not upstream (master
+  9581154a2, 2026-11-17, has the bug). A realtime conversation that fills
+  the context sends its error with no prompt tokens, and `send_error`
+  asserts on that: the app aborts. Drop it when llama.cpp fixes it.
 
 ### 2c. Artifact fingerprints
 

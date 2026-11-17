@@ -21,13 +21,21 @@
 struct ggml_backend_device;
 struct server_context;
 struct server_context_meta;
+struct server_routes;
 struct common_params;
 
 // ---------------------------------------------------------------------------
 // ServerResources — holds a server_context and its dedicated loop thread.
 // ---------------------------------------------------------------------------
 struct ServerResources {
+  // The params of the load. [routes] reads them: its sampling is the GGUF's
+  // recommended settings. Constant after the load.
+  std::unique_ptr<common_params> params;
   std::unique_ptr<server_context> srv_ctx;
+  // llama-server's handlers, for the realtime API (fllama_realtime.cpp).
+  // Created before the load, as llama-server does; its meta is set after
+  // it. After srv_ctx: it refers to it, so it is destroyed first.
+  std::unique_ptr<server_routes> routes;
   // Read before the loop thread starts; constant after. llama-server's HTTP
   // threads share one such copy in the same way.
   std::unique_ptr<server_context_meta> meta;

@@ -75,3 +75,8 @@ void fllamaCancelInference(int requestId) {
 Future<int> fllamaTokenize(FllamaTokenizeRequest request) async {
   throw UnimplementedError();
 }
+
+/// The realtime API runs on native platforms only.
+FllamaRealtimeSession fllamaRealtimeOpen(FllamaRealtimeRequest request) {
+  throw UnsupportedError('The realtime API runs on native platforms only');
+}

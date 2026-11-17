@@ -1,0 +1,24 @@
+From: fllama (not yet upstream)
+Subject: server : realtime context overflow aborts the process
+
+A realtime conversation whose audio or text does not fit in the context
+fails with ERROR_TYPE_EXCEED_CONTEXT_SIZE. send_error(slot, ...) passes the
+slot's prompt tokens, which a realtime slot never has (0), and send_error
+asserts n_prompt_tokens > 0 for that error type: GGML_ASSERT aborts the
+whole app. Upstream master 9581154a2 (2026-11-17) has the same code. Drop
+this patch when llama.cpp fixes it.
+---
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 78c8ef14..1fcc51c8 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -3692,7 +3692,8 @@ private:
+                 return;
+             }
+             if (!slot.rt->update()) {
+-                send_error(slot, slot.rt->error, slot.rt->error_type);
++                // the conversation has no prompt tokens: a full context is the context size
++                send_error(slot.task->id, slot.rt->error, slot.rt->error_type, slot.n_ctx, slot.n_ctx);
+                 slot.release();
+                 return;
+             }
