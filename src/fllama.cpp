@@ -7,6 +7,7 @@
 #include "fllama.h"
 #include "fllama_backends.h"
 #include "fllama_inference_queue.h"
+#include "fllama_internal.h"
 #include "fllama_mtmd.h"
 
 // server-context headers (no HTTP / httplib dependency)
@@ -72,59 +73,6 @@ static void log_message(const std::string &msg,
   logger(dart_string(msg));
 }
 
-// While it exists, sends llama.cpp's log lines from this thread to the
-// request's logger, and keeps the first error line. A model load runs on the
-// request's thread, so its reason for failing is here.
-class request_log_scope {
-public:
-  explicit request_log_scope(fllama_log_callback logger)
-      : logger_(logger),
-        scope_([this](enum ggml_log_level level, const char *text) {
-          add(level, text ? text : "");
-          return false; // Also to stderr.
-        }) {}
-
-  ~request_log_scope() { end_line(); }
-
-  // The first error line that llama.cpp logged, or "".
-  const std::string &first_error() const { return first_error_; }
-
-  // Sends the line that llama.cpp has not ended. Call it before the request's
-  // last callback: no log may reach Dart after it.
-  void end_line() {
-    if (!line_.empty()) {
-      send(line_);
-      line_.clear();
-    }
-  }
-
-private:
-  void add(enum ggml_log_level level, const std::string &text) {
-    if (level != GGML_LOG_LEVEL_CONT) level_ = level;
-    line_ += text;
-    for (size_t end; (end = line_.find('\n')) != std::string::npos;) {
-      send(line_.substr(0, end));
-      line_.erase(0, end + 1);
-    }
-  }
-
-  void send(const std::string &line) {
-    if (line.empty()) return;
-    if (level_ == GGML_LOG_LEVEL_ERROR && first_error_.empty()) {
-      first_error_ = line;
-    }
-    if (logger_ && level_ >= GGML_LOG_LEVEL_INFO) {
-      logger_(dart_string("[llama.cpp] " + line));
-    }
-  }
-
-  fllama_log_callback logger_;
-  enum ggml_log_level level_ = GGML_LOG_LEVEL_INFO;
-  std::string line_;
-  std::string first_error_;
-  fllama_thread_log_scope scope_; // Last: it uses the members above.
-};
-
 // ── Callbacks ────────────────────────────────────────────────────────────────
 
 // How a request ended: the arguments of its last callback.
@@ -167,7 +115,7 @@ static void emit_done(fllama_inference_callback callback,
 // on top of llama.cpp's defaults. llama-server starts every request from
 // these. common_init_sampler_from_model() in common.cpp does the same, but it
 // is static.
-static common_params_sampling model_sampling(const llama_model *model) {
+common_params_sampling fllama_model_sampling(const llama_model *model) {
   common_params_sampling s;
   auto meta = [&](llama_model_meta_key key, std::string &out) {
     char buf[512] = {0};
@@ -219,6 +167,14 @@ static common_params_sampling model_sampling(const llama_model *model) {
 //  causing ggml_abort when server_context tries to free Metal resources.)
 static ServerManager &g_mgr = *new ServerManager();
 
+ServerManager &fllama_server_manager() { return g_mgr; }
+
+char *fllama_dart_string(const std::string &s) { return dart_string(s); }
+
+void fllama_log(const std::string &msg, fllama_log_callback logger) {
+  log_message(msg, logger);
+}
+
 static void fllama_copy_cstr(char * dst, size_t cap, const char * src) {
   if (dst == nullptr || cap == 0) {
     return;
@@ -254,6 +210,133 @@ static std::string error_type_of_server_error(const json &e,
   return "other";
 }
 
+// ── Load-time params ─────────────────────────────────────────────────────────
+
+common_params fllama_load_params(const fllama_inference_request &request) {
+  common_params params;
+  params.model.path       = request.model_path;
+  // 0 is the model's trained context size. n_batch and n_ubatch keep
+  // llama-server's defaults (2048, 512); llama.cpp limits n_batch to n_ctx.
+  params.n_ctx            = request.context_size;
+  params.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_AUTO;
+  params.n_parallel       = ServerManager::DEFAULT_N_PARALLEL;
+  // One KV cache shared by the slots, as llama-server does by default.
+  // Without it each slot gets n_ctx / n_parallel, so one request could use
+  // only a quarter of the context the user chose.
+  params.kv_unified       = true;
+  params.n_predict        = request.max_tokens;
+  // Not set (<= 0): one thread per physical core, minus one for the app
+  // and the OS, as fllama's default. A thread count that the app sets is
+  // used as it is.
+  params.cpuparams.n_threads     = request.num_threads > 0
+      ? request.num_threads
+      : std::max(1, common_cpu_get_num_math() - 1);
+  params.use_jinja = true;
+  params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+  // Default is 8192 MiB — way too much for mobile/embedded.
+  // 0 = disable host-memory prompt caching entirely.
+  // The KV cache in the llama_context still handles prompt reuse;
+  // this only controls the EXTRA host-RAM cache from PR #16391.
+  params.cache_ram_mib = 0;
+
+#if TARGET_IPHONE_SIMULATOR
+  params.n_gpu_layers = 0;
+#else
+  params.n_gpu_layers = request.num_gpu_layers;
+#endif
+
+  // GPU selection (ADR 004, D9). An unknown key falls back to Auto.
+  const std::string gpu_device_key =
+      request.gpu_device_key ? request.gpu_device_key : "";
+  if (!gpu_device_key.empty()) {
+    if (auto *dev = fllama_backends_find_device(gpu_device_key)) {
+      params.devices = {dev, nullptr};
+      log_message("[fllama] GPU: " + gpu_device_key, request.dart_logger);
+    } else {
+      log_message("[fllama] WARNING: GPU not found, using Auto: " +
+                      gpu_device_key,
+                  request.dart_logger);
+    }
+  }
+
+  // Leave out GPUs that cannot run the ops of every model (a macOS VM's
+  // paravirtual Metal device): llama.cpp would split the graph at nearly
+  // every op, and the image encoder crashes. An empty list is every GPU.
+  if (params.n_gpu_layers != 0) {
+    // params.devices is NULL-terminated, as llama_model_params.devices.
+    std::vector<ggml_backend_dev_t> candidates;
+    for (auto *dev : params.devices) {
+      if (dev != nullptr) candidates.push_back(dev);
+    }
+    if (candidates.empty()) {
+      candidates = fllama_backends_gpu_devices();
+    }
+    std::vector<ggml_backend_dev_t> usable;
+    for (auto *dev : candidates) {
+      if (fllama_backends_device_runs_models(dev)) {
+        usable.push_back(dev);
+      } else {
+        log_message("[fllama] GPU skipped, it cannot run matrix multiply, "
+                    "RMS norm and softmax: " +
+                        fllama_backends_device_key(dev),
+                    request.dart_logger);
+      }
+    }
+    if (usable.size() != candidates.size()) {
+      params.devices = usable;
+      if (!params.devices.empty()) params.devices.push_back(nullptr);
+    }
+    if (!candidates.empty() && usable.empty()) {
+      params.n_gpu_layers = 0;
+      log_message("[fllama] No usable GPU: running on the CPU.",
+                  request.dart_logger);
+    }
+  }
+
+  if (request.model_mmproj_path && strlen(request.model_mmproj_path) > 0)
+    params.mmproj.path = request.model_mmproj_path;
+  // The image encoder follows the model: CPU only when no layer is on a GPU.
+  params.mmproj_use_gpu = params.n_gpu_layers != 0;
+
+  // Multi-Token Prediction (MTP) speculative decoding. When a drafter/
+  // assistant GGUF is supplied (e.g. gemma-4-31B-it-assistant), wire it into
+  // common_params.speculative; server_context handles the shared-KV draft
+  // loop. Leave draft cache_type_k/v at their F16 defaults — Q8 KV cache was
+  // shown to collapse MTP draft acceptance (llama.cpp#23398).
+  if (request.draft_model_path && strlen(request.draft_model_path) > 0) {
+    params.speculative.draft.mparams.path = request.draft_model_path;
+    params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
+    params.speculative.draft.n_max =
+        request.draft_n_max > 0 ? request.draft_n_max : 3;
+    if (request.draft_p_min >= 0.0f) {
+      params.speculative.draft.p_min = request.draft_p_min;
+    }
+    log_message("[fllama] MTP draft enabled: n_max=" +
+                    std::to_string(params.speculative.draft.n_max) +
+                    ", p_min=" +
+                    std::to_string(params.speculative.draft.p_min),
+                request.dart_logger);
+    // Offload the (small) drafter alongside the target model.
+    params.speculative.draft.n_gpu_layers = params.n_gpu_layers;
+    params.speculative.draft.devices = params.devices;
+  }
+
+  // common_params is normally finalized by common_params_parse(), but fllama
+  // constructs it directly. Keep the batch and speculative thread settings
+  // in sync with the requested model threads just as llama.cpp's CLI does.
+  // Leaving cpuparams_batch.n_threads at its sentinel value (-1) makes the
+  // b10450 threadpool allocation wrap to nearly SIZE_MAX.
+  postprocess_cpu_params(params.cpuparams, nullptr);
+  postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
+  postprocess_cpu_params(params.speculative.draft.cpuparams,
+                         &params.cpuparams);
+  postprocess_cpu_params(params.speculative.draft.cpuparams_batch,
+                         &params.cpuparams_batch);
+
+  return params;
+}
+
 // ── The actual inference logic (runs on per-request thread) ──────────────────
 
 // Runs [request] up to its last result. Sets [outcome], and sends updates on
@@ -269,128 +352,7 @@ static void run_inference_body(const fllama_inference_request &request,
     // One-time backend init.
     fllama_backends_init_once();
 
-    // ── 1. Build common_params ────────────────────────────────────────
-
-    common_params params;
-    params.model.path       = request.model_path;
-    // 0 is the model's trained context size. n_batch and n_ubatch keep
-    // llama-server's defaults (2048, 512); llama.cpp limits n_batch to n_ctx.
-    params.n_ctx            = request.context_size;
-    params.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_AUTO;
-    params.n_parallel       = ServerManager::DEFAULT_N_PARALLEL;
-    // One KV cache shared by the slots, as llama-server does by default.
-    // Without it each slot gets n_ctx / n_parallel, so one request could use
-    // only a quarter of the context the user chose.
-    params.kv_unified       = true;
-    params.n_predict        = request.max_tokens;
-    // Not set (<= 0): one thread per physical core, minus one for the app
-    // and the OS, as fllama's default. A thread count that the app sets is
-    // used as it is.
-    params.cpuparams.n_threads     = request.num_threads > 0
-        ? request.num_threads
-        : std::max(1, common_cpu_get_num_math() - 1);
-    params.use_jinja = true;
-    params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-
-    // Default is 8192 MiB — way too much for mobile/embedded.
-    // 0 = disable host-memory prompt caching entirely.
-    // The KV cache in the llama_context still handles prompt reuse;
-    // this only controls the EXTRA host-RAM cache from PR #16391.
-    params.cache_ram_mib = 0;
-
-#if TARGET_IPHONE_SIMULATOR
-    params.n_gpu_layers = 0;
-#else
-    params.n_gpu_layers = request.num_gpu_layers;
-#endif
-
-    // GPU selection (ADR 004, D9). An unknown key falls back to Auto.
-    const std::string gpu_device_key =
-        request.gpu_device_key ? request.gpu_device_key : "";
-    if (!gpu_device_key.empty()) {
-      if (auto *dev = fllama_backends_find_device(gpu_device_key)) {
-        params.devices = {dev, nullptr};
-        log_message("[fllama] GPU: " + gpu_device_key, request.dart_logger);
-      } else {
-        log_message("[fllama] WARNING: GPU not found, using Auto: " +
-                        gpu_device_key,
-                    request.dart_logger);
-      }
-    }
-
-    // Leave out GPUs that cannot run the ops of every model (a macOS VM's
-    // paravirtual Metal device): llama.cpp would split the graph at nearly
-    // every op, and the image encoder crashes. An empty list is every GPU.
-    if (params.n_gpu_layers != 0) {
-      // params.devices is NULL-terminated, as llama_model_params.devices.
-      std::vector<ggml_backend_dev_t> candidates;
-      for (auto *dev : params.devices) {
-        if (dev != nullptr) candidates.push_back(dev);
-      }
-      if (candidates.empty()) {
-        candidates = fllama_backends_gpu_devices();
-      }
-      std::vector<ggml_backend_dev_t> usable;
-      for (auto *dev : candidates) {
-        if (fllama_backends_device_runs_models(dev)) {
-          usable.push_back(dev);
-        } else {
-          log_message("[fllama] GPU skipped, it cannot run matrix multiply, "
-                      "RMS norm and softmax: " +
-                          fllama_backends_device_key(dev),
-                      request.dart_logger);
-        }
-      }
-      if (usable.size() != candidates.size()) {
-        params.devices = usable;
-        if (!params.devices.empty()) params.devices.push_back(nullptr);
-      }
-      if (!candidates.empty() && usable.empty()) {
-        params.n_gpu_layers = 0;
-        log_message("[fllama] No usable GPU: running on the CPU.",
-                    request.dart_logger);
-      }
-    }
-
-    if (request.model_mmproj_path && strlen(request.model_mmproj_path) > 0)
-      params.mmproj.path = request.model_mmproj_path;
-    // The image encoder follows the model: CPU only when no layer is on a GPU.
-    params.mmproj_use_gpu = params.n_gpu_layers != 0;
-
-    // Multi-Token Prediction (MTP) speculative decoding. When a drafter/
-    // assistant GGUF is supplied (e.g. gemma-4-31B-it-assistant), wire it into
-    // common_params.speculative; server_context handles the shared-KV draft
-    // loop. Leave draft cache_type_k/v at their F16 defaults — Q8 KV cache was
-    // shown to collapse MTP draft acceptance (llama.cpp#23398).
-    if (request.draft_model_path && strlen(request.draft_model_path) > 0) {
-      params.speculative.draft.mparams.path = request.draft_model_path;
-      params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_MTP };
-      params.speculative.draft.n_max =
-          request.draft_n_max > 0 ? request.draft_n_max : 3;
-      if (request.draft_p_min >= 0.0f) {
-        params.speculative.draft.p_min = request.draft_p_min;
-      }
-      log_message("[fllama] MTP draft enabled: n_max=" +
-                      std::to_string(params.speculative.draft.n_max) +
-                      ", p_min=" +
-                      std::to_string(params.speculative.draft.p_min),
-                  request.dart_logger);
-      // Offload the (small) drafter alongside the target model.
-      params.speculative.draft.n_gpu_layers = params.n_gpu_layers;
-      params.speculative.draft.devices = params.devices;
-    }
-
-    // common_params is normally finalized by common_params_parse(), but fllama
-    // constructs it directly. Keep the batch and speculative thread settings
-    // in sync with the requested model threads just as llama.cpp's CLI does.
-    // Leaving cpuparams_batch.n_threads at its sentinel value (-1) makes the
-    // b10450 threadpool allocation wrap to nearly SIZE_MAX.
-    postprocess_cpu_params(params.cpuparams, nullptr);
-    postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
-    postprocess_cpu_params(params.speculative.draft.cpuparams,
-                           &params.cpuparams);
-    postprocess_cpu_params(params.speculative.draft.cpuparams_batch,
-                           &params.cpuparams_batch);
+    common_params params = fllama_load_params(request);
 
     // ── 2. Get or create server_context ───────────────────────────────
 
@@ -538,7 +500,7 @@ static void run_inference_body(const fllama_inference_request &request,
     // fllama's defaults: the sampling settings that the GGUF recommends,
     // then the request struct's fields. NaN is: not set.
     common_params params_base = params;
-    params_base.sampling = model_sampling(model);
+    params_base.sampling = fllama_model_sampling(model);
     if (!std::isnan(request.temperature))
       params_base.sampling.temp = request.temperature;
     if (!std::isnan(request.top_p))

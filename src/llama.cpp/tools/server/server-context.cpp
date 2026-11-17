@@ -3692,7 +3692,8 @@ private:
                 return;
             }
             if (!slot.rt->update()) {
-                send_error(slot, slot.rt->error, slot.rt->error_type);
+                // the conversation has no prompt tokens: a full context is the context size
+                send_error(slot.task->id, slot.rt->error, slot.rt->error_type, slot.n_ctx, slot.n_ctx);
                 slot.release();
                 return;
             }

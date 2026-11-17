@@ -1,5 +1,6 @@
 #include "fllama_inference_queue.h"
 #include "fllama_backends.h"
+#include "fllama_internal.h"
 #include "server-context.h"
 
 #include "llama.cpp/common/common.h"
@@ -156,15 +157,21 @@ ServerManager::get_or_create(const std::string &model_path,
 
     auto res = std::make_unique<ServerResources>();
     res->model_path = model_path;
+    res->params = std::make_unique<common_params>(params);
     res->srv_ctx = std::make_unique<server_context>();
+    res->routes =
+        std::make_unique<server_routes>(*res->params, *res->srv_ctx);
 
-    auto load_params = params;
-    if (!res->srv_ctx->load_model(load_params)) {
+    if (!res->srv_ctx->load_model(*res->params)) {
       std::cerr << "[ServerManager] load_model failed: " << model_path
                 << "\n";
       return nullptr;
     }
 
+    // As fllama's chat requests: the GGUF's recommended sampling.
+    res->params->sampling =
+        fllama_model_sampling(llama_get_model(res->srv_ctx->get_llama_context()));
+    res->routes->update_meta(*res->srv_ctx);
     res->meta = std::make_unique<server_context_meta>(res->srv_ctx->get_meta());
     auto *ctx_ptr = res->srv_ctx.get();
     res->loop_thread = std::thread([ctx_ptr] { ctx_ptr->start_loop(); });

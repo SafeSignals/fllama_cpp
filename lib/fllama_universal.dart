@@ -277,3 +277,65 @@ Future<int> fllamaChat(
 String fllamaJsonSchemaToGrammar(String jsonSchema) {
   return convertToJsonGrammar(jsonSchema);
 }
+
+/// The model of a realtime session. See [fllamaRealtimeOpen].
+class FllamaRealtimeRequest {
+  const FllamaRealtimeRequest({
+    required this.modelPath,
+    required this.mmprojPath,
+    this.contextSize = 0,
+    this.numGpuLayers = -1,
+    this.numThreads = -1,
+    this.gpuDeviceKey,
+    this.query,
+    this.logger,
+  });
+
+  final String modelPath;
+
+  /// The audio projector. The realtime API needs one.
+  final String mmprojPath;
+
+  /// Tokens of context. 0 is the model's trained context size. A session
+  /// holds the conversation in its context: input and output audio use it.
+  /// A request for the same model with other load-time fields reloads the
+  /// model after the running requests and sessions end.
+  final int contextSize;
+
+  /// See [FllamaInferenceRequest.numGpuLayers].
+  final int numGpuLayers;
+
+  /// See [FllamaInferenceRequest.numThreads].
+  final int numThreads;
+
+  /// See [FllamaInferenceRequest.gpuDeviceKey].
+  final String? gpuDeviceKey;
+
+  /// The URL query of the WebSocket, without "?": for example
+  /// `intent=transcription`. Not percent-decoded.
+  final String? query;
+
+  /// Log lines of the session, including llama.cpp's.
+  final void Function(String)? logger;
+}
+
+/// A session of llama.cpp's realtime API: the `/v1/realtime` WebSocket of
+/// llama-server, in process. The events are the JSON objects of OpenAI
+/// Realtime GA, as llama.cpp's `tools/server/README.md` describes them.
+abstract interface class FllamaRealtimeSession {
+  /// The type of the last event of a session. Its `reason` is `client`
+  /// ([close]), `server` (the server ended the session, for example when the
+  /// conversation does not fit in the context), or `error`.
+  static const closedEventType = 'fllama.realtime.closed';
+
+  /// Server events, in order. The first is `session.created`, or an `error`
+  /// (`error.type` `model_load` if the model did not load). The last is a
+  /// [closedEventType] event; then the stream is done.
+  Stream<Map<String, dynamic>> get events;
+
+  /// Sends one client event. Returns false if the session has ended.
+  bool send(Map<String, dynamic> event);
+
+  /// Ends the session. [events] then gets the closed event soon.
+  void close();
+}

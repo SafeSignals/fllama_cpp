@@ -84,6 +84,68 @@ class FllamaBindings {
   late final _fllama_inference_cancel = _fllama_inference_cancelPtr
       .asFunction<void Function(int)>();
 
+  /// Starts a realtime session and returns its ID (> 0), or 0 if [request] has
+  /// no model_path or [on_event] is NULL. Returns at once: the model loads on
+  /// the session's thread, and the session starts with "session.created".
+  /// These fields of [request] apply: context_size, model_path,
+  /// model_mmproj_path, num_gpu_layers, num_threads, gpu_device_key, the draft
+  /// fields, and dart_logger. The strings are copied; the caller may free them
+  /// when this returns. [query] is the URL query of the WebSocket, for example
+  /// "intent=transcription", or NULL. It is not percent-decoded.
+  /// A session holds a slot of the model until it ends.
+  int fllama_realtime_open(
+    fllama_inference_request request,
+    ffi.Pointer<ffi.Char> query,
+    fllama_realtime_event_callback on_event,
+  ) {
+    return _fllama_realtime_open(request, query, on_event);
+  }
+
+  late final _fllama_realtime_openPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            fllama_inference_request,
+            ffi.Pointer<ffi.Char>,
+            fllama_realtime_event_callback,
+          )
+        >
+      >('fllama_realtime_open');
+  late final _fllama_realtime_open = _fllama_realtime_openPtr
+      .asFunction<
+        int Function(
+          fllama_inference_request,
+          ffi.Pointer<ffi.Char>,
+          fllama_realtime_event_callback,
+        )
+      >();
+
+  /// Sends one client event (JSON text) to a session. Returns 1, or 0 if the
+  /// session is not open.
+  int fllama_realtime_send(int session, ffi.Pointer<ffi.Char> event_json) {
+    return _fllama_realtime_send(session, event_json);
+  }
+
+  late final _fllama_realtime_sendPtr =
+      _lookup<
+        ffi.NativeFunction<ffi.Int Function(ffi.Int, ffi.Pointer<ffi.Char>)>
+      >('fllama_realtime_send');
+  late final _fllama_realtime_send = _fllama_realtime_sendPtr
+      .asFunction<int Function(int, ffi.Pointer<ffi.Char>)>();
+
+  /// Ends a session. Its closed event follows soon, with reason "client". Does
+  /// nothing if the session has ended.
+  void fllama_realtime_close(int session) {
+    return _fllama_realtime_close(session);
+  }
+
+  late final _fllama_realtime_closePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+        'fllama_realtime_close',
+      );
+  late final _fllama_realtime_close = _fllama_realtime_closePtr
+      .asFunction<void Function(int)>();
+
   /// Allows or forbids GPU backends for this process. Call before any other
   /// fllama call. With 0, fllama never loads a GPU backend library.
   /// Returns 0 on success, non-zero if backends are already loaded with a
@@ -372,6 +434,20 @@ typedef fllama_inference_callback =
           ffi.Pointer<ffi.Char> error_json,
           ffi.Uint8 done,
         )
+      >
+    >;
+
+/// Called with one server event of a realtime session, from a native thread.
+/// [event_json] is allocated with the Dart VM's allocator; the callee owns it
+/// and must free it. The last event of a session is
+/// {"type": "fllama.realtime.closed", "reason": "client" | "server" | "error"}.
+/// fllama makes no call for the session after it, to this callback or to the
+/// request's logger. A model that fails to load gives an "error" event with
+/// error.type "model_load" before it.
+typedef fllama_realtime_event_callback =
+    ffi.Pointer<
+      ffi.NativeFunction<
+        ffi.Void Function(ffi.Int session, ffi.Pointer<ffi.Char> event_json)
       >
     >;
 

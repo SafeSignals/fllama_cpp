@@ -98,6 +98,43 @@ EMSCRIPTEN_KEEPALIVE FFI_PLUGIN_EXPORT void fllama_inference_sync(struct fllama_
                            fllama_inference_callback callback);
 EMSCRIPTEN_KEEPALIVE FFI_PLUGIN_EXPORT void fllama_inference_cancel(int request_id);
 
+// ── Realtime API ──────────────────────────────────────────────────────────
+//
+// llama-server's realtime WebSocket API (/v1/realtime, OpenAI Realtime GA
+// events), with no server: the events of the WebSocket are passed as JSON
+// text. See the "Realtime" part of llama.cpp's tools/server/README.md.
+// Native platforms only.
+
+// Called with one server event of a realtime session, from a native thread.
+// [event_json] is allocated with the Dart VM's allocator; the callee owns it
+// and must free it. The last event of a session is
+// {"type": "fllama.realtime.closed", "reason": "client" | "server" | "error"}.
+// fllama makes no call for the session after it, to this callback or to the
+// request's logger. A model that fails to load gives an "error" event with
+// error.type "model_load" before it.
+typedef void (*fllama_realtime_event_callback)(int session, char *event_json);
+
+// Starts a realtime session and returns its ID (> 0), or 0 if [request] has
+// no model_path or [on_event] is NULL. Returns at once: the model loads on
+// the session's thread, and the session starts with "session.created".
+// These fields of [request] apply: context_size, model_path,
+// model_mmproj_path, num_gpu_layers, num_threads, gpu_device_key, the draft
+// fields, and dart_logger. The strings are copied; the caller may free them
+// when this returns. [query] is the URL query of the WebSocket, for example
+// "intent=transcription", or NULL. It is not percent-decoded.
+// A session holds a slot of the model until it ends.
+FFI_PLUGIN_EXPORT int fllama_realtime_open(
+    struct fllama_inference_request request, const char *query,
+    fllama_realtime_event_callback on_event);
+
+// Sends one client event (JSON text) to a session. Returns 1, or 0 if the
+// session is not open.
+FFI_PLUGIN_EXPORT int fllama_realtime_send(int session, const char *event_json);
+
+// Ends a session. Its closed event follows soon, with reason "client". Does
+// nothing if the session has ended.
+FFI_PLUGIN_EXPORT void fllama_realtime_close(int session);
+
 // Allows or forbids GPU backends for this process. Call before any other
 // fllama call. With 0, fllama never loads a GPU backend library.
 // Returns 0 on success, non-zero if backends are already loaded with a

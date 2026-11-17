@@ -292,3 +292,8 @@ void fllamaCancelInference(int requestId) {
   if (!fllamaWebRuntimeLoaded) return;
   fllamaCancelInferenceJs(requestId);
 }
+
+/// The realtime API runs on native platforms only.
+FllamaRealtimeSession fllamaRealtimeOpen(FllamaRealtimeRequest request) {
+  throw UnsupportedError('The realtime API runs on native platforms only');
+}

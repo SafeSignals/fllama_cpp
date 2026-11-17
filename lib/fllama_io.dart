@@ -1,6 +1,7 @@
 export 'io/fllama_io_gguf.dart';
 export 'io/fllama_io_gpu.dart';
 export 'io/fllama_io_inference.dart';
+export 'io/fllama_io_realtime.dart';
 export 'io/fllama_io_tokenize.dart';
 
 import 'dart:ffi';

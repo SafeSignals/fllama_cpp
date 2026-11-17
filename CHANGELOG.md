@@ -1,3 +1,10 @@
+## 1.1.0
+
+- Realtime API: `fllamaRealtimeOpen` runs llama.cpp's `/v1/realtime` WebSocket API in process, with no server. With LFM3-Audio-2B it holds a voice conversation with tool calls. Native only.
+- llama.cpp patch: a realtime conversation that does not fit in the context ends with an error. It aborted the app.
+- Realtime API: live transcription (Voxtral Realtime) no longer stops after its first token. A realtime request has no token limit of its own.
+- llama.cpp patch: on macOS and iOS, an app that exits with a model loaded no longer aborts in `ggml_metal_device_free`.
+
 ## 1.0.2
 
 - llama.cpp b12211 (was b11719) and wllama 6647c1e (was 3bb2a46). On an M4 Max with Qwen 3.5 0.8B: web generation about 7% faster in Chrome, native CPU prompt processing about 11% faster; Metal unchanged.
