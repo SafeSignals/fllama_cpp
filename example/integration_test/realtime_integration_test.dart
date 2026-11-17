@@ -14,6 +14,17 @@
 //
 // cd example && flutter test -d macos integration_test/realtime_integration_test.dart \
 //   --dart-define=FLLAMA_REALTIME_DIR=$PWD/.model_cache/lfm3
+//
+// Live transcription with Voxtral Realtime is also opt-in. Pass a directory
+// with --dart-define=FLLAMA_VOXTRAL_DIR=<dir> that has:
+//
+// - Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf and
+//   mmproj-Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf, from
+//   https://huggingface.co/ggml-org/Voxtral-Mini-4B-Realtime-2602-GGUF
+// - water_plants.wav: "Remind me to water the plants tomorrow morning.",
+//   16 kHz mono PCM16. On macOS:
+//   say -o w.aiff "Remind me to water the plants tomorrow morning." &&
+//   afconvert -f WAVE -d LEI16@16000 -c 1 w.aiff water_plants.wav
 
 import 'dart:async';
 import 'dart:convert';
@@ -27,6 +38,7 @@ import 'package:path_provider/path_provider.dart';
 import 'test/initialize.dart';
 
 const _dir = String.fromEnvironment('FLLAMA_REALTIME_DIR');
+const _voxtralDir = String.fromEnvironment('FLLAMA_VOXTRAL_DIR');
 const _closed = fllama.FllamaRealtimeSession.closedEventType;
 
 void main() {
@@ -41,6 +53,8 @@ void main() {
     });
     return;
   }
+
+  _voxtralTests();
 
   group('realtime API', () {
     late String model;
@@ -218,6 +232,68 @@ void main() {
       expect(all.first['error']['type'], 'model_load');
       expect(all.last['reason'], 'error');
     }, timeout: const Timeout(Duration(minutes: 2)));
+  });
+}
+
+void _voxtralTests() {
+  group('realtime API, Voxtral live transcription', () {
+    late String model;
+    late String mmproj;
+    late Uint8List speech;
+    var hasFiles = false;
+
+    setUpAll(() async {
+      prepareTestBindings();
+      await preparePathProviderAsync();
+      if (_voxtralDir.isEmpty) {
+        print('[realtime test] skipping: FLLAMA_VOXTRAL_DIR is not set');
+        return;
+      }
+      final files = [
+        File('$_voxtralDir/Voxtral-Mini-4B-Realtime-2602-Q4_K_M.gguf'),
+        File('$_voxtralDir/mmproj-Voxtral-Mini-4B-Realtime-2602-Q8_0.gguf'),
+        File('$_voxtralDir/water_plants.wav'),
+      ];
+      for (final f in files) {
+        if (!await f.exists()) {
+          print('[realtime test] skipping: ${f.path} is missing');
+          return;
+        }
+      }
+      model = (await _stageForSandbox(files[0])).path;
+      mmproj = (await _stageForSandbox(files[1])).path;
+      speech = _wavPcm(await (await _stageForSandbox(files[2])).readAsBytes());
+      hasFiles = true;
+    });
+
+    test('speech is transcribed in full', () async {
+      if (!hasFiles) return;
+      final session = fllama.fllamaRealtimeOpen(
+        fllama.FllamaRealtimeRequest(
+          modelPath: model,
+          mmprojPath: mmproj,
+          contextSize: 8192,
+        ),
+      );
+      final events = _Events(session);
+      final created = await events.next('session.created');
+      expect(created['session']['type'], 'transcription');
+
+      _append(session, speech);
+      // Silence after the speech: the model transcribes with a delay.
+      _append(session, Uint8List(32000));
+      session.send({'type': 'input_audio_buffer.commit'});
+      final completed = await events.next(
+        'conversation.item.input_audio_transcription.completed',
+      );
+      final text = (completed['transcript'] as String).toLowerCase();
+      print('[realtime test] transcript: $text');
+      // A request without a token limit stopped after the first token.
+      expect(text, contains('water the plants'));
+
+      session.close();
+      expect((await events.next(_closed))['reason'], 'client');
+    }, timeout: const Timeout(Duration(minutes: 5)));
   });
 }
 

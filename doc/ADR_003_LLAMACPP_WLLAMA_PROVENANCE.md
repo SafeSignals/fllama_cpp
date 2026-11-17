@@ -68,6 +68,11 @@ Patches (2026-11-13):
   9581154a2, 2026-11-17, has the bug). A realtime conversation that fills
   the context sends its error with no prompt tokens, and `send_error`
   asserts on that: the app aborts. Drop it when llama.cpp fixes it.
+- `0003-ggml-metal-keep-devices-at-exit.patch`: not upstream (master
+  9581154a2, 2026-11-17, has the code). At exit, the static Metal device
+  list frees each device, and `ggml_metal_device_free` asserts that no Metal
+  buffer exists. An app that exits with a loaded model aborts. The list is
+  now never destroyed. Drop it when llama.cpp fixes it.
 
 ### 2c. Artifact fingerprints
 

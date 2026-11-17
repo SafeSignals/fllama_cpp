@@ -202,6 +202,11 @@ std::string run_session(const owned_request &owned, const std::string &query,
   if (!conn.is_open()) return "client";
   fllama_backends_init_once();
   common_params params = fllama_load_params(request);
+  // A realtime request has no max_tokens. 0 as the global n_predict would
+  // stop a live transcription after its first token: the stream task of
+  // Voxtral Realtime sets no limit of its own. Responses of a conversation
+  // set theirs (max_output_tokens).
+  if (params.n_predict <= 0) params.n_predict = -1;
   ServerResources *srv = mgr.get_or_create(
       owned.model_path, params, request.dart_logger,
       [&conn] { return !conn.is_open(); });
