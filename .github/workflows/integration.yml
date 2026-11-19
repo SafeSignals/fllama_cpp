@@ -103,6 +103,8 @@ jobs:
               trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
               if xvfb-run -a "${run[@]}" --verbose > "$trace" 2>&1; then
                 tail -30 "$trace"
+                # Report the actual runner's unwind-library load order.
+                readelf -d "build/linux/${TARGET#linux-}/debug/bundle/fllama_example" | grep NEEDED
               else
                 status=$?
                 tail -200 "$trace"

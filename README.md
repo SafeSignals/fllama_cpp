@@ -61,6 +61,26 @@ fllamaChat(request, (response, json, done, error) {
   });
 });
 ```
+### Flutter 3.50 on Linux
+
+Flutter 3.50's Linux GTK engine exports its own unwinder. This can abort
+Linux apps when native code throws a C++ exception, even if that code catches
+it. This affects debug, profile, and release runners; upgrading the Dart
+package alone does not fix it. See [flutter/flutter#196402](https://github.com/flutter/flutter/issues/196402).
+
+In your app's `linux/runner/CMakeLists.txt` (or `linux/CMakeLists.txt` if
+it defines the executable), add this after `add_executable` and before linking
+Flutter. It requires CMake 3.13 or later:
+
+```cmake
+target_link_options(${BINARY_NAME} PRIVATE
+  "LINKER:--push-state,--no-as-needed,-lgcc_s,--pop-state")
+```
+
+Rebuild the Linux runner. `readelf -d <runner>` should list `libgcc_s.so.1`
+before `libflutter_linux_gtk.so` in `NEEDED`. The example runner already does
+this. Remove the workaround when your Flutter SDK includes the upstream fix.
+
 ### Realtime voice (native only)
 `fllamaRealtimeOpen` runs a session of llama.cpp's realtime API, the
 `/v1/realtime` WebSocket of llama-server, in process. Events are the JSON
