@@ -94,16 +94,37 @@ jobs:
             if [[ "$GPU" != true ]]; then export FLLAMA_TEST_NUM_GPU_LAYERS=0; fi
             run=(flutter test -d "$DEVICE" integration_test/local_llm_integration_test.dart -r expanded)
             if [[ -n "${PAUSE_THREADS:-}" ]]; then run+=(--dart-define=FLLAMA_TEST_PAUSE_THREADS=$PAUSE_THREADS); fi
-            # The SDK's DDS proxy can close the test stream partway through
-            # a Linux desktop run. There is no debugger here, so connect
-            # directly to the app's VM service.
-            if [[ "$RUNNER_OS" == Linux ]]; then run=(xvfb-run -a "${run[@]}" --no-dds); fi
-            "${run[@]}"
-      - name: Linux process diagnostics
+            if [[ "$RUNNER_OS" == Linux ]]; then
+              # The runner normally hides the desktop app's crash output.
+              # Keep Flutter's verbose trace for failures, not every test run.
+              trace="$RUNNER_TEMP/flutter-desktop-trace.log"
+              (while sleep 30; do echo 'Linux desktop integration still running'; done) &
+              heartbeat=$!
+              trap 'kill "$heartbeat" 2>/dev/null || true' EXIT
+              if xvfb-run -a "${run[@]}" --verbose > "$trace" 2>&1; then
+                tail -30 "$trace"
+              else
+                status=$?
+                tail -200 "$trace"
+                exit "$status"
+              fi
+            else
+              "${run[@]}"
+            fi
+      - name: Linux crash backtrace
         if: failure() && runner.os == 'Linux'
         run: |
           sudo journalctl -k -n 80 --no-pager || true
-          coredumpctl list --no-pager || true
+          sudo coredumpctl --no-pager info fllama_example || true
+          if command -v gdb >/dev/null; then
+            sudo coredumpctl --no-pager --debugger-arguments="-batch -ex 'bt 36'" debug fllama_example || true
+          fi
+      - if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flutter-desktop-trace-${{ env.TARGET }}
+          path: ${{ runner.temp }}/flutter-desktop-trace.log
+          if-no-files-found: ignore
       - name: Crash reports
         if: failure() && runner.os == 'macOS'
         run: |
