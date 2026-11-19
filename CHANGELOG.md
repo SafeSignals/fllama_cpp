@@ -1,3 +1,7 @@
+## 1.1.1
+
+- Flutter 3.50 compatability
+
 ## 1.1.0
 
 - Realtime API: `fllamaRealtimeOpen` runs llama.cpp's `/v1/realtime` WebSocket API in process, with no server. With LFM3-Audio-2B it holds a voice conversation with tool calls. Native only.
