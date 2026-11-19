@@ -94,8 +94,16 @@ jobs:
             if [[ "$GPU" != true ]]; then export FLLAMA_TEST_NUM_GPU_LAYERS=0; fi
             run=(flutter test -d "$DEVICE" integration_test/local_llm_integration_test.dart -r expanded)
             if [[ -n "${PAUSE_THREADS:-}" ]]; then run+=(--dart-define=FLLAMA_TEST_PAUSE_THREADS=$PAUSE_THREADS); fi
-            if [[ "$RUNNER_OS" == Linux ]]; then run=(xvfb-run -a "${run[@]}"); fi
+            # The SDK's DDS proxy can close the test stream partway through
+            # a Linux desktop run. There is no debugger here, so connect
+            # directly to the app's VM service.
+            if [[ "$RUNNER_OS" == Linux ]]; then run=(xvfb-run -a "${run[@]}" --no-dds); fi
             "${run[@]}"
+      - name: Linux process diagnostics
+        if: failure() && runner.os == 'Linux'
+        run: |
+          sudo journalctl -k -n 80 --no-pager || true
+          coredumpctl list --no-pager || true
       - name: Crash reports
         if: failure() && runner.os == 'macOS'
         run: |
