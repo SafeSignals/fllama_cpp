@@ -34,6 +34,15 @@ enum FllamaErrorType {
   /// recreates the context.
   backend,
 
+  /// The model cannot do what the request asks, for example a decision
+  /// request to a model that is not a decision model, or an image without a
+  /// projector that reads images.
+  notSupported,
+
+  /// The request was cancelled before it had a result. See
+  /// [FllamaDecision.cancel].
+  cancelled,
+
   /// Any other failure.
   other,
 }
@@ -69,6 +78,8 @@ class FllamaError {
     'invalid_request': FllamaErrorType.invalidRequest,
     'exceed_context_size': FllamaErrorType.contextSizeExceeded,
     'backend': FllamaErrorType.backend,
+    'not_supported': FllamaErrorType.notSupported,
+    'cancelled': FllamaErrorType.cancelled,
   };
 
   @override
@@ -338,4 +349,56 @@ abstract interface class FllamaRealtimeSession {
 
   /// Ends the session. [events] then gets the closed event soon.
   void close();
+}
+
+/// The model of a decision request. See [fllamaDecide].
+class FllamaDecisionRequest {
+  const FllamaDecisionRequest({
+    required this.modelPath,
+    this.mmprojPath,
+    this.contextSize = 0,
+    this.numGpuLayers = -1,
+    this.numThreads = -1,
+    this.gpuDeviceKey,
+    this.logger,
+  });
+
+  /// A decision model: a GGUF with `<arch>.decision.type`, such as LFM3 D1.
+  final String modelPath;
+
+  /// The projector of the model's images and audio, or null for text only.
+  final String? mmprojPath;
+
+  /// Tokens of context, and of the batch: the decision models of llama.cpp
+  /// read the whole prompt, with its images and audio, in one batch. 0 is
+  /// 4096, not the model's trained context size. A larger prompt fails with
+  /// [FllamaErrorType.contextSizeExceeded]. A request for the same model
+  /// with other load-time fields reloads the model after the running
+  /// requests end.
+  final int contextSize;
+
+  /// See [FllamaInferenceRequest.numGpuLayers].
+  final int numGpuLayers;
+
+  /// See [FllamaInferenceRequest.numThreads].
+  final int numThreads;
+
+  /// See [FllamaInferenceRequest.gpuDeviceKey].
+  final String? gpuDeviceKey;
+
+  /// Log lines of the request, including llama.cpp's.
+  final void Function(String)? logger;
+}
+
+/// A decision request of llama.cpp's decision API: `POST /v1/systemone` of
+/// llama-server, in process. See [fllamaDecide].
+abstract interface class FllamaDecision {
+  /// The response body of `/v1/systemone`: `model`, `answers` (an answer per
+  /// question ID) and `usage`, as llama.cpp's `tools/server/README.md`
+  /// describes them. Completes with a [FllamaError] if the request fails.
+  Future<Map<String, dynamic>> get response;
+
+  /// Cancels the request. [response] then fails with
+  /// [FllamaErrorType.cancelled], unless the request has its result.
+  void cancel();
 }

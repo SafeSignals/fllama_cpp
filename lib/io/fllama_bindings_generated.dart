@@ -146,6 +146,44 @@ class FllamaBindings {
   late final _fllama_realtime_close = _fllama_realtime_closePtr
       .asFunction<void Function(int)>();
 
+  /// Answers the decision request [body_json], the JSON body of /v1/systemone,
+  /// with [request]'s model. Returns 1 at once, or 0 if [request] has no
+  /// model_path or [body_json] or [callback] is NULL. The model loads on the
+  /// request's thread.
+  /// These fields of [request] apply: request_id (fllama_inference_cancel()
+  /// cancels with it), context_size, model_path, model_mmproj_path,
+  /// num_gpu_layers, num_threads, gpu_device_key and dart_logger. The strings
+  /// are copied; the caller may free them when this returns.
+  /// context_size is also the batch: the decision models of llama.cpp read the
+  /// whole prompt, with its images and audio, in one batch. 0 is 4096, not the
+  /// model's trained context size.
+  int fllama_decision(
+    fllama_inference_request request,
+    ffi.Pointer<ffi.Char> body_json,
+    fllama_decision_callback callback,
+  ) {
+    return _fllama_decision(request, body_json, callback);
+  }
+
+  late final _fllama_decisionPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int Function(
+            fllama_inference_request,
+            ffi.Pointer<ffi.Char>,
+            fllama_decision_callback,
+          )
+        >
+      >('fllama_decision');
+  late final _fllama_decision = _fllama_decisionPtr
+      .asFunction<
+        int Function(
+          fllama_inference_request,
+          ffi.Pointer<ffi.Char>,
+          fllama_decision_callback,
+        )
+      >();
+
   /// Allows or forbids GPU backends for this process. Call before any other
   /// fllama call. With 0, fllama never loads a GPU backend library.
   /// Returns 0 on success, non-zero if backends are already loaded with a
@@ -448,6 +486,28 @@ typedef fllama_realtime_event_callback =
     ffi.Pointer<
       ffi.NativeFunction<
         ffi.Void Function(ffi.Int session, ffi.Pointer<ffi.Char> event_json)
+      >
+    >;
+
+/// Called once per decision request, from a native thread. Exactly one of
+/// [response_json] and [error_json] is not NULL; it is allocated with the Dart
+/// VM's allocator, and the callee owns it and must free it.
+/// - response_json: the response body of /v1/systemone: {"model", "answers",
+/// "usage"}.
+/// - error_json: {"type": "...", "message": "..."}. Types: model_load,
+/// invalid_request, not_supported (not a decision model, or images or audio
+/// without a projector that reads them), exceed_context_size, backend,
+/// cancelled, other.
+/// fllama makes no call for the request after it, to this callback or to the
+/// request's logger.
+typedef fllama_decision_callback =
+    ffi.Pointer<
+      ffi.NativeFunction<
+        ffi.Void Function(
+          ffi.Int request_id,
+          ffi.Pointer<ffi.Char> response_json,
+          ffi.Pointer<ffi.Char> error_json,
+        )
       >
     >;
 
