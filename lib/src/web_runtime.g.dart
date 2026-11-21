@@ -2,4 +2,4 @@
 
 /// Version of the web runtime files of this package (kiln
 /// ADR 002 D7). Load each file with the query `?v=$webRuntimeVersion`.
-const webRuntimeVersion = '60df30d312f0426e';
+const webRuntimeVersion = 'd1846916164b11f1';
