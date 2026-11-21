@@ -297,3 +297,11 @@ void fllamaCancelInference(int requestId) {
 FllamaRealtimeSession fllamaRealtimeOpen(FllamaRealtimeRequest request) {
   throw UnsupportedError('The realtime API runs on native platforms only');
 }
+
+/// The decision API runs on native platforms only.
+FllamaDecision fllamaDecide(
+  FllamaDecisionRequest request,
+  Map<String, dynamic> body,
+) {
+  throw UnsupportedError('The decision API runs on native platforms only');
+}

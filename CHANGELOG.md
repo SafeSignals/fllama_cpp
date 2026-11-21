@@ -1,3 +1,8 @@
+## 1.2.0
+
+- Decision API: `fllamaDecide` runs llama.cpp's `/v1/systemone` in process, with no server: choice, score and yes/no questions about text, images and audio, answered by a decision model such as LFM3 D1 Omni. Native only.
+- `FllamaErrorType` has `notSupported` and `cancelled`, used by the decision API.
+
 ## 1.1.1
 
 - Flutter 3.50 compatability

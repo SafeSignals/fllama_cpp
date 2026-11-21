@@ -111,6 +111,39 @@ conversation stays in the context, and audio uses it (LFM3-Audio: about
 12.5 positions per second of input). A full context ends the session with
 an error. A session holds one of the model's four slots until it ends.
 
+### Decisions (native only)
+`fllamaDecide` runs llama.cpp's decision API, `POST /v1/systemone` of
+llama-server, in process: typed questions about a state, answered by a
+decision model in one forward pass, with no generated text. The request and
+response are the JSON bodies of that route; see "POST `/v1/systemone`" in
+`src/llama.cpp/tools/server/README.md`. A question is a `choice`, a `score`
+or a `noul` (yes/no). With its projector, LFM3 D1 Omni also reads images and
+hears audio (`files`: data URLs).
+
+```dart
+final decision = fllamaDecide(
+  FllamaDecisionRequest(
+    modelPath: 'd1-Omni-2B-Q8_0.gguf',
+    mmprojPath: 'mmproj-d1-Omni-2B-Q8_0.gguf',
+  ),
+  {
+    'state': 'I was charged twice for my order.',
+    'questions': {
+      'team': {
+        'type': 'choice',
+        'instructions': 'Which team should handle this?',
+        'criteria': {'billing': null, 'shipping': null},
+      },
+    },
+  },
+);
+final answers = (await decision.response)['answers'];
+// {"team": {"choice": "billing", "probabilities": {...}, "confidence": ...}}
+```
+
+The model reads the whole prompt, with its images and audio, in one batch:
+`contextSize` is also the batch, and 0 is 4096.
+
 ## Tips & Tricks
 ### Web
   Web uses a wllama/WebGPU runtime. In a Flutter web build, the fllama build hook installs it in `web/kiln/fllama_cpp/` of the app, and fllama loads it at the first call; the app needs no script tag (kiln ADR 002). Other embedders serve those files and set `FllamaWeb.runtimeUri`.

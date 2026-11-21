@@ -135,6 +135,43 @@ FFI_PLUGIN_EXPORT int fllama_realtime_send(int session, const char *event_json);
 // nothing if the session has ended.
 FFI_PLUGIN_EXPORT void fllama_realtime_close(int session);
 
+// ── Decision API ──────────────────────────────────────────────────────────
+//
+// llama-server's decision API (POST /v1/systemone), with no server: typed
+// questions about a state, answered by a decision model in one forward pass.
+// The request and response bodies are passed as JSON text. See the
+// "/v1/systemone" part of llama.cpp's tools/server/README.md. Native
+// platforms only.
+
+// Called once per decision request, from a native thread. Exactly one of
+// [response_json] and [error_json] is not NULL; it is allocated with the Dart
+// VM's allocator, and the callee owns it and must free it.
+// - response_json: the response body of /v1/systemone: {"model", "answers",
+//   "usage"}.
+// - error_json: {"type": "...", "message": "..."}. Types: model_load,
+//   invalid_request, not_supported (not a decision model, or images or audio
+//   without a projector that reads them), exceed_context_size, backend,
+//   cancelled, other.
+// fllama makes no call for the request after it, to this callback or to the
+// request's logger.
+typedef void (*fllama_decision_callback)(int request_id, char *response_json,
+                                         char *error_json);
+
+// Answers the decision request [body_json], the JSON body of /v1/systemone,
+// with [request]'s model. Returns 1 at once, or 0 if [request] has no
+// model_path or [body_json] or [callback] is NULL. The model loads on the
+// request's thread.
+// These fields of [request] apply: request_id (fllama_inference_cancel()
+// cancels with it), context_size, model_path, model_mmproj_path,
+// num_gpu_layers, num_threads, gpu_device_key and dart_logger. The strings
+// are copied; the caller may free them when this returns.
+// context_size is also the batch: the decision models of llama.cpp read the
+// whole prompt, with its images and audio, in one batch. 0 is 4096, not the
+// model's trained context size.
+FFI_PLUGIN_EXPORT int fllama_decision(struct fllama_inference_request request,
+                                      const char *body_json,
+                                      fllama_decision_callback callback);
+
 // Allows or forbids GPU backends for this process. Call before any other
 // fllama call. With 0, fllama never loads a GPU backend library.
 // Returns 0 on success, non-zero if backends are already loaded with a

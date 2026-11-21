@@ -215,6 +215,7 @@ add_library(fllama SHARED
   "fllama_inference_queue.cpp"
   "fllama_mtmd.cpp"
   "fllama_realtime.cpp"
+  "fllama_decision.cpp"
   "fllama_sha256.cpp"
   "fllama_tokenize.cpp"
   "fllama.cpp"
