@@ -12,11 +12,32 @@ endif()
 # the NDK's libvulkan.so.
 if (GGML_VULKAN_PREBUILT_DIR)
     include("${GGML_VULKAN_PREBUILT_DIR}/features.cmake")
+    # ggml-vulkan calls vkGetPhysicalDeviceFeatures2 (Vulkan 1.1), which the
+    # NDK's libvulkan.so stub exports only from API level 28. The app's
+    # minSdk is lower, so link against the API 28 stub: the library then
+    # needs Android 9 or later to load, and on older phones fllama logs
+    # "GPU backend failed to load" and stays on the CPU.
+    set(_ggml_vk_link vulkan)
+    if (ANDROID AND CMAKE_SYSROOT)
+        if (CMAKE_ANDROID_ARCH_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "arm64-v8a")
+            set(_ggml_vk_triple aarch64-linux-android)
+        elseif (CMAKE_ANDROID_ARCH_ABI STREQUAL "x86_64" OR ANDROID_ABI STREQUAL "x86_64")
+            set(_ggml_vk_triple x86_64-linux-android)
+        endif()
+        foreach (_ggml_vk_api RANGE 28 40)
+            set(_ggml_vk_stub "${CMAKE_SYSROOT}/usr/lib/${_ggml_vk_triple}/${_ggml_vk_api}/libvulkan.so")
+            if (_ggml_vk_triple AND EXISTS "${_ggml_vk_stub}")
+                set(_ggml_vk_link "${_ggml_vk_stub}")
+                break()
+            endif()
+        endforeach()
+        message(STATUS "Vulkan library: ${_ggml_vk_link}")
+    endif()
     if (NOT TARGET Vulkan::Vulkan)
         add_library(Vulkan::Vulkan INTERFACE IMPORTED)
         set_target_properties(Vulkan::Vulkan PROPERTIES
             INTERFACE_INCLUDE_DIRECTORIES "${GGML_VULKAN_PREBUILT_DIR}/include"
-            INTERFACE_LINK_LIBRARIES vulkan)
+            INTERFACE_LINK_LIBRARIES "${_ggml_vk_link}")
     endif()
     set(Vulkan_FOUND TRUE)
     set(Vulkan_INCLUDE_DIR "${GGML_VULKAN_PREBUILT_DIR}/include")
