@@ -41,7 +41,8 @@ void main() {
       expect(defines['CMAKE_PLATFORM_NO_VERSIONED_SONAME'], 'ON');
       expect(defines, isNot(contains('GGML_VULKAN')));
       expect(hook.usesGpuBackends(OS.linux, Architecture.arm64), isFalse);
-      expect(hook.usesGpuBackends(OS.android, Architecture.arm64), isFalse);
+      // Veemoo fork: Android arm64 bundles ggml-vulkan (prebuilt shaders).
+      expect(hook.usesGpuBackends(OS.android, Architecture.arm64), isTrue);
       expect(hook.usesGpuBackends(OS.linux, Architecture.x64), isTrue);
       expect(hook.usesGpuBackends(OS.windows, Architecture.arm64), isTrue);
     });

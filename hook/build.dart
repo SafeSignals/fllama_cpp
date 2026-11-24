@@ -144,7 +144,13 @@ Future<void> _buildFromSource({
 
   // ── GPU SDK ────────────────────────────────────────────────────────
   final gpuSplit = usesGpuBackends(targetOS, targetArch);
-  final vulkan = gpuSplit ? findVulkanSdk(targetOS, targetArch) : null;
+  final vulkan = gpuSplit
+      ? findVulkanSdk(
+          targetOS,
+          targetArch,
+          prebuiltDir: Directory.fromUri(sourceDir.resolve('vulkan_prebuilt/')),
+        )
+      : null;
   if (gpuSplit && vulkan == null) {
     if (release != null && targetArch == Architecture.x64) {
       // ADR 004 D7: a release for Windows x64 or Linux x64 has a GPU pack.
@@ -427,6 +433,7 @@ CMakeBuilder createFllamaBuilder({
     ...defines,
     if (toolset != null)
       'CMAKE_TOOLCHAIN_FILE': _toolsetToolchainFile(sourceDir, toolset),
+    // Unused on Android, whose shaders are prebuilt (src/vulkan_prebuilt).
     if (defines['GGML_VULKAN'] == 'ON')
       'GGML_VULKAN_SHADERS_GEN_TOOLCHAIN': p.join(
         Directory.fromUri(sourceDir).path,
@@ -563,11 +570,13 @@ String? findOnPath(String name) {
 }
 
 /// Whether [targetOS] and [targetArch] ship GPU backend libraries (Vulkan,
-/// and CUDA packs). Android (ADR 004, NG2) and Linux arm64 split only for
-/// their CPU variants.
+/// and CUDA packs). Linux arm64 splits only for its CPU variants.
+///
+/// Veemoo fork: Android arm64 bundles ggml-vulkan, with shaders compiled
+/// ahead of time (src/vulkan_prebuilt). This reopens ADR 004 NG2 to measure
+/// it on phones; the app loads it only when it allows the GPU.
 bool usesGpuBackends(OS targetOS, Architecture targetArch) =>
     usesSplitLibraries(targetOS, targetArch) &&
-    targetOS != OS.android &&
     !(targetOS == OS.linux && targetArch == Architecture.arm64);
 
 /// Windows ARM64 CPU backends: published file suffix → GGML_CPU_ARM_ARCH.
@@ -604,7 +613,27 @@ String vulkanSdkHint(OS targetOS) => targetOS == OS.windows
 /// hooks_runner does not pass VULKAN_SDK to hooks, so this looks in fixed
 /// locations. Windows uses only the pinned SDK version, so every machine
 /// builds the same backend. Linux uses the distribution packages.
-VulkanSdk? findVulkanSdk(OS targetOS, Architecture targetArch) {
+///
+/// Android uses [prebuiltDir] (src/vulkan_prebuilt): the shaders compiled
+/// ahead of time and the Vulkan headers, so the build machine needs only the
+/// NDK. Its CMake finds the directory itself (src/CMakeLists.txt), so the
+/// build key holds no absolute path.
+VulkanSdk? findVulkanSdk(
+  OS targetOS,
+  Architecture targetArch, {
+  Directory? prebuiltDir,
+}) {
+  if (targetOS == OS.android) {
+    if (targetArch != Architecture.arm64 || prebuiltDir == null) return null;
+    final header = File(
+      p.join(prebuiltDir.path, 'include', 'vulkan', 'vulkan_core.h'),
+    );
+    final features = File(p.join(prebuiltDir.path, 'features.cmake'));
+    if (!header.existsSync() || !features.existsSync()) return null;
+    final version = readVulkanHeaderVersion(header.readAsStringSync());
+    if (version == null) return null;
+    return VulkanSdk(headerVersion: version);
+  }
   if (targetOS == OS.windows) {
     // Windows ARM64 GPU backend is chosen by benchmark (ADR 004, D12).
     if (targetArch != Architecture.x64) return null;

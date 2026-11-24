@@ -256,8 +256,18 @@ std::vector<std::string> cpu_backend_files(const fs::path &dir) {
 void load_backends_from(const fs::path &dir) {
 #if defined(__ANDROID__)
   // dlopen of a file name finds the library in the app's library path, also
-  // inside the APK. Android has no GPU backend library (ADR 004, NG2).
+  // inside the APK. The Veemoo fork builds ggml-vulkan for Android (ADR 004
+  // NG2, reopened to measure it); it loads only when the app allows the GPU.
   (void)dir;
+#if defined(FLLAMA_VULKAN_PROBE)
+  if (g_gpu_allowed.load()) {
+    if (!load_backend_file(fs::path("libggml-vulkan.so"))) {
+      log_line("GPU backend failed to load: ggml-vulkan");
+    }
+  } else {
+    log_line("GPU backends disabled");
+  }
+#endif
 #else
   if (dir.empty()) {
     log_line("Cannot find the fllama library directory; no backends loaded");
@@ -375,9 +385,15 @@ bool probe_vulkan_gpu() {
   auto get_proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(
       reinterpret_cast<void *>(GetProcAddress(lib, "vkGetInstanceProcAddr")));
 #else
-  void *lib = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+#if defined(__ANDROID__)
+  // Android's Vulkan loader has no soname version.
+  const char *loader = "libvulkan.so";
+#else
+  const char *loader = "libvulkan.so.1";
+#endif
+  void *lib = dlopen(loader, RTLD_NOW | RTLD_LOCAL);
   if (!lib) {
-    log_line("Vulkan probe: libvulkan.so.1 not found");
+    log_line(std::string("Vulkan probe: ") + loader + " not found");
     return false;
   }
   auto get_proc = reinterpret_cast<PFN_vkGetInstanceProcAddr>(

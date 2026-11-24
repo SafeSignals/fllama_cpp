@@ -6,12 +6,28 @@ if (POLICY CMP0147)
     cmake_policy(SET CMP0147 NEW)
 endif()
 
+# fllama: GGML_VULKAN_PREBUILT_DIR holds shaders compiled ahead of time and
+# the Vulkan and SPIR-V headers (src/vulkan_prebuilt, used for Android). The
+# build machine then needs no glslc, Vulkan SDK or host compiler, and links
+# the NDK's libvulkan.so.
+if (GGML_VULKAN_PREBUILT_DIR)
+    include("${GGML_VULKAN_PREBUILT_DIR}/features.cmake")
+    if (NOT TARGET Vulkan::Vulkan)
+        add_library(Vulkan::Vulkan INTERFACE IMPORTED)
+        set_target_properties(Vulkan::Vulkan PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${GGML_VULKAN_PREBUILT_DIR}/include"
+            INTERFACE_LINK_LIBRARIES vulkan)
+    endif()
+    set(Vulkan_FOUND TRUE)
+    set(Vulkan_INCLUDE_DIR "${GGML_VULKAN_PREBUILT_DIR}/include")
+else()
 find_package(Vulkan COMPONENTS glslc REQUIRED)
 
 if (DEFINED ENV{VULKAN_SDK})
     list(APPEND CMAKE_PREFIX_PATH "$ENV{VULKAN_SDK}")
 endif()
 find_package(SPIRV-Headers CONFIG REQUIRED)
+endif()
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
@@ -77,6 +93,11 @@ if (Vulkan_FOUND)
 
     set(VULKAN_SHADER_GEN_CMAKE_ARGS "")
 
+    if (GGML_VULKAN_PREBUILT_DIR)
+        # The glslc features the shaders were compiled with (features.cmake).
+        add_compile_definitions(${GGML_VULKAN_PREBUILT_DEFINES})
+        message(STATUS "Vulkan shaders: prebuilt, ${GGML_VULKAN_PREBUILT_DEFINES}")
+    else()
     # Test all shader extensions
     test_shader_extension_support(
         "GL_KHR_cooperative_matrix"
@@ -120,6 +141,8 @@ if (Vulkan_FOUND)
         "GGML_VULKAN_FLOAT_E4M3_GLSLC_SUPPORT"
     )
 
+    endif() # GGML_VULKAN_PREBUILT_DIR
+
     target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -159,6 +182,16 @@ if (Vulkan_FOUND)
         target_link_libraries(ggml-vulkan PRIVATE ggml-cpu)
     endif()
 
+    if (GGML_VULKAN_PREBUILT_DIR)
+        file(GLOB _ggml_vk_generated_shader_files
+                  "${GGML_VULKAN_PREBUILT_DIR}/shaders/*.cpp")
+        list(APPEND _ggml_vk_generated_shader_files
+                    "${GGML_VULKAN_PREBUILT_DIR}/shaders/ggml-vulkan-shaders.hpp")
+        target_sources(ggml-vulkan PRIVATE ${_ggml_vk_generated_shader_files})
+        target_include_directories(ggml-vulkan PRIVATE
+                                   "${GGML_VULKAN_PREBUILT_DIR}/shaders")
+        set(_ggml_vk_shader_files "")
+    else()
     # Set up toolchain for host compilation whether cross-compiling or not
     if (CMAKE_CROSSCOMPILING)
         if (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN)
@@ -257,6 +290,8 @@ if (Vulkan_FOUND)
         target_sources(ggml-vulkan PRIVATE ${_ggml_vk_target_cpp})
         list(APPEND _ggml_vk_generated_shader_files ${_ggml_vk_target_cpp})
     endforeach()
+
+    endif() # GGML_VULKAN_PREBUILT_DIR
 
     source_group("Vulkan shaders" FILES ${_ggml_vk_shader_files})
     source_group("Generated Vulkan shaders" FILES ${_ggml_vk_generated_shader_files})

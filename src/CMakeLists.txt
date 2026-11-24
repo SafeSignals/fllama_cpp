@@ -94,6 +94,13 @@ endif()
 # MSBuild try-compile paths too long under %LOCALAPPDATA%\fllama\Cache\<key>
 # (MSB6003, DirectoryNotFoundException). A short prefix keeps them short.
 set_property(DIRECTORY PROPERTY EP_PREFIX "${CMAKE_BINARY_DIR}/vk")
+# Android Vulkan (Veemoo fork, reopening ADR 004 NG2 to measure it): the
+# shaders are compiled ahead of time in src/vulkan_prebuilt, so the build
+# machine needs only the NDK. See src/vulkan_prebuilt/README.md.
+if(ANDROID AND GGML_VULKAN AND NOT GGML_VULKAN_PREBUILT_DIR)
+  set(GGML_VULKAN_PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_prebuilt"
+    CACHE PATH "Prebuilt Vulkan shaders and headers")
+endif()
 add_subdirectory("llama.cpp")
 if(NOT TARGET cpp-httplib)
   add_library(cpp-httplib INTERFACE)
@@ -262,7 +269,10 @@ if(GGML_BACKEND_DL)
     # fllama_has_vulkan_gpu() loads the Vulkan loader at run time. It needs
     # only the headers, not vulkan-1.lib.
     target_compile_definitions(fllama PRIVATE FLLAMA_VULKAN_PROBE)
-    if(Vulkan_INCLUDE_DIR)
+    if(GGML_VULKAN_PREBUILT_DIR)
+      target_include_directories(fllama PRIVATE
+        "${GGML_VULKAN_PREBUILT_DIR}/include")
+    elseif(Vulkan_INCLUDE_DIR)
       target_include_directories(fllama PRIVATE "${Vulkan_INCLUDE_DIR}")
     endif()
   endif()
